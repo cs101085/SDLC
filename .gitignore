@@ -1,0 +1,6 @@
+# Reference material: keep each subfolder of References/ visible via its
+# README.md only, and ignore everything else inside those subfolders.
+# Subfolders without a README.md keep a .gitkeep so their title stays visible.
+References/*/*
+!References/*/README.md
+!References/*/.gitkeep
