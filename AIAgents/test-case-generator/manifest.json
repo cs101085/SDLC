@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "agent": {
+    "name": "test-case-generator",
+    "description": "Generates reviewable UI test plans and repository-compatible Playwright test handoffs from a Jira ticket and a read-only source baseline"
+  },
+  "container": {
+    "name": "test-case-generator",
+    "image": "ghcr.io/harris-smartworks/copilot-cli:latest"
+  },
+  "files": [
+    "agents/test-case-generator.agent.md",
+    "instructions/test-case-generator.instructions.md",
+    "instructions/testplan-contract.md",
+    "instructions/testcode-contract.md",
+    "instructions/testcode-naming-rules.md",
+    "manifest.json"
+  ]
+}

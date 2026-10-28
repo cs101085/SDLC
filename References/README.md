@@ -137,61 +137,64 @@ Source of truth: [`SDLC-Orchestration/README.md`](./SDLC-Orchestration/README.md
 
 ### Orchestration runtime
 
-- Kestra is pinned to `v1.3.31` by digest in `SDLC-Orchestration/Dockerfile`, with only the plugins `plugin-docker` and `plugin-script-shell` `[from-docs]`.
-- The UI is at `http://localhost:8080/ui/main` and the REST API at `http://localhost:8080/api/v1/main/...` `[from-docs]`.
-- Prerequisites: Docker or Podman, Git, and a `.env` file copied from `SDLC-Orchestration/.env.example` `[from-docs]`.
-- Flows load automatically from `SDLC-Orchestration/_flows/`; a watcher reads only files prefixed `main_*.yml`, so any other filename never loads `[from-docs]`.
+- Kestra is pinned to `v1.3.31` by digest in `SDLC-Orchestration/Dockerfile`; the image installs `plugin-docker` and `plugin-script-shell`. It also includes pinned `yq`, `git`, and `jq` `[from-config]`.
+- Docker Compose maps host port `8080` by default (overridable with `KESTRA_PORT`) and the UI is at `http://localhost:8080/ui/main`; the REST API is tenant-scoped under `/api/v1/main/` `[from-config]`.
+- Prerequisites: Docker or Podman, Git, and a `.env` file based on `SDLC-Orchestration/.env.example` `[from-docs]`.
+- Development uses `FLOW_WATCH=true`; Kestra watches `_flows/` and reloads saved flow files. Flow filenames must begin with `main_` so the watcher assigns them to the `main` tenant `[from-config]`.
+- Production uses `FLOW_WATCH=false`; `system.gitops-sync` deploys flows from the checked-out branch after validation and waits for in-flight pipeline executions to drain. Deploy the sync flow initially with `scripts/deploy/update.sh`; subsequent flow changes arrive through Git `[from-config]`.
 
 ### Orchestration flow layout
 
 | Path (under `SDLC-Orchestration/`) | Contains |
 | --- | --- |
-| `_flows/main_master.yml` | Orchestrates the full pipeline and triggers each phase in sequence `[from-docs]` |
-| `_flows/phases/` | One folder per phase: `jira-analysis`, `design`, `code-generation`, `test-generation`, `review` `[from-docs]` |
-| `_flows/util/agents/` | Fetches agent config and launches copilotCLI containers `[from-docs]` |
-| `_flows/util/artifacts/` | Workspace lifecycle: prepare, fetch, update, publish `[from-docs]` |
-| `_flows/util/git/` | Low-level git primitives such as clone and sparse-checkout `[from-docs]` |
-| `_flows/util/jira/` | Posts status updates back to Jira `[from-docs]` |
+| `_flows/main_master.yml` | The only API entry point; initializes the run and dispatches ready stages until the graph is complete `[from-config]` |
+| `_flows/stages/` | Eleven stage flows, each defining its resources, deliverables, and `nextStages` `[from-config]` |
+| `_flows/orchestration/` | Initializes executions, resolves ready stages, and wraps stage execution `[from-docs]` |
+| `_flows/util/agents/` | Runs containerized agents and confidence checks `[from-config]` |
+| `_flows/util/artifacts/` | Prepares, fetches, inherits, and publishes execution workspaces `[from-config]` |
+| `_flows/util/git/`, `_flows/util/jira/` | Source-repository operations and Jira integrations `[from-config]` |
+| `_flows/maintenance/` | Cleans up finished executions and stale working directories `[from-config]` |
+| `_config/` | Kestra server settings, project configuration, and ticket-type-to-start-stage mapping `[from-config]` |
 | `scripts/dev/`, `scripts/deploy/` | Local development helpers and server deployment scripts `[from-docs]` |
 
-### Orchestration commands
+To run locally, create `.env` from `.env.example`, run `.\scripts\dev\setup.ps1`, then `docker compose build` and `docker compose up -d`. On Podman, use `podman-compose -f podman-compose.yml`; the production setup deploys flows with `scripts/deploy/update.sh` `[from-docs]`.
 
-| Purpose | Command | Run from | Documented in | Status |
-| --- | --- | --- | --- | --- |
-| Pull the AI container image | `.\scripts\dev\setup.ps1` | `SDLC-Orchestration/` | `README.md` | `[from-docs]` |
-| Build the custom Kestra image | `docker compose build` | `SDLC-Orchestration/` | `README.md` | `[from-docs]` |
-| Start Kestra and Postgres | `docker compose up -d` | `SDLC-Orchestration/` | `README.md` | `[from-docs]` |
-| Build on Podman hosts | `podman-compose -f podman-compose.yml build` | `SDLC-Orchestration/` | `README.md` | `[from-docs]` |
-| Start on Podman hosts | `podman-compose -f podman-compose.yml up -d` | `SDLC-Orchestration/` | `README.md` | `[from-docs]` |
-| Update a running server | `scripts/deploy/update.sh` | `SDLC-Orchestration/` | `README.md` | `[from-docs]` |
+### Lifecycle graph and current stage status
 
-Ordering requirement: create `.env` from `.env.example` and fill every value before `docker compose build` `[from-docs]`.
+The graph is compiled from stage `nextStages`, `resources`, and `deliverables`; it is not a fixed list of phases. A stage can start after multiple upstream stages have completed, and parallel ready stages are dispatched together `[from-config]`.
 
-### Orchestration trigger inputs
+| Lifecycle path | Stages |
+| --- | --- |
+| Idea tickets | `Ideation` → `Requirements` → `Analysis` → `Design` → `FirstSecurityReview` |
+| Other tickets | `Requirements` → `Analysis` → `Design` → `FirstSecurityReview` |
+| Bug tickets | `Analysis` → `Design` → `FirstSecurityReview` |
+| Parallel stage 6 | `CodeGeneration` and `TestCaseGeneration` |
+| Converged stage 7 | `SecondSecurityReview` |
+| Parallel stage 8 | `Review` and `Verification` |
+| Final stage | `Release` |
 
-The pipeline is triggered by `POST /api/v1/main/executions/ai-dlc/master-sdlc` using HTTP Basic auth and `multipart/form-data` `[from-docs]`.
+The stage names and paths are defined in `_flows/stages/`; stage starts by ticket type are configured in `_config/pipeline.yml` `[from-config]`. `Ideation`, `Requirements`, both security reviews, `TestCaseGeneration`, `Verification`, and `Release` are currently marked as stubs; `Analysis`, `Design`, `CodeGeneration`, and `Review` are not `[from-config]`.
+
+### Triggering a pipeline run
+
+The pipeline endpoint is `POST /api/v1/main/executions/ai-dlc/master-sdlc`, using HTTP Basic authentication and `multipart/form-data` `[from-docs]`.
 
 | Input | Default | Description |
 | --- | --- | --- |
-| `ticketId` | required | Jira ticket key, for example `ABC-123` `[from-docs]` |
-| `startPhase` | `JiraAnalysis` | First phase to run; prior artifacts are inherited `[from-docs]` |
-| `endPhase` | `Review` | Last phase to run `[from-docs]` |
-| `previousExecutionPath` | automatic | Overrides the prior execution to inherit from `[from-docs]` |
-| `enableJiraUpdates` | `false` | Posts comments and status transitions to Jira `[from-docs]` |
-| `enableTestGeneration` | `true` | Set to `false` to skip test generation `[from-docs]` |
-| `humanGatedPhases` | empty | Phases to pause after for approval; repeat the field once per phase `[from-docs]` |
+| `ticketId` | required | Jira ticket key, for example `ABC-123` `[from-config]` |
+| `requestorEmail` | `""` | Requestor for traceability and outcome notification `[from-config]` |
+| `initialStage` | `[]` | Stage(s) to start at; if empty, `Idea` starts at `Ideation`, `Bug` at `Analysis`, and other ticket types at `Requirements` `[from-config]` |
+| `finalStages` | `["Release"]` | Last stage(s) to run; naming one stage of a parallel pair does not start its sibling `[from-config]` |
+| `previousExecutionPath` | `""` | Earlier artifact execution to copy into this run `[from-config]` |
+| `skipConfidenceCheck` | `"First"` | `False` skips none, `First` skips the starting stage, and `True` skips all stage confidence checks `[from-config]` |
+| `dryRun` | `false` | Suppresses external notifications and Jira updates; it does not prevent branch pushes or artifact persistence `[from-config]` |
+| `humanGatedStages` | `[]` | Stages to pause after for human approval `[from-config]` |
 
-Valid phase values: `JiraAnalysis`, `Design`, `CodeGeneration`, `TestGeneration`, `Review` `[from-docs]`.
+`initialStage` and `finalStages` accept `Ideation`, `Requirements`, `Analysis`, `Design`, `FirstSecurityReview`, `CodeGeneration`, `TestCaseGeneration`, `SecondSecurityReview`, `Review`, `Verification`, and `Release`; `humanGatedStages` accepts the same values except `Release` `[from-config]`.
 
-### Orchestration artifact cycle
+### Artifact lifecycle
 
-Every phase repeats the same three steps, which makes each phase independently runnable and resumable `[from-docs]`.
-
-1. Fetch — sparse-checkout the execution path into a local working directory.
-2. Work — run the phase and write outputs locally.
-3. Publish — commit and push the local directory back to `SDLC-Artifacts`.
-
-On a resume, `artifacts.prepare-workspace` copies artifacts from a prior execution before the new phase begins `[from-docs]`.
+Each run is stored in `SDLC-Artifacts` under `Artifacts/<TICKET>/<EXEC_ID>/`. Stages fetch their own workspace, run their work, and publish their stage directory; a `previousExecutionPath` is copied into the new run rather than reused `[from-docs]`. The master flow compiles stage records into the execution manifest at completion `[from-config]`.
 
 ## SDLC-Artifacts
 
