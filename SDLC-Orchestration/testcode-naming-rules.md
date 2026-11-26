@@ -1,71 +1,85 @@
-# Generated test naming rules
+# Test code naming rules
 
-These rules make the fully qualified TestNG method stable across generation,
-Xray registration, and JUnit result binding.
+These rules keep the fully qualified TestNG method stable across generation,
+Xray registration, and JUnit result binding. They follow the conventions in the
+test repository README.
 
-## Package decision
+## Identity
 
-Generated tests remain in the existing flat `tests` package. The reference
-repository already uses `src/test/java/tests/`, and changing to a namespaced
-package would require moving existing classes and changing suite entries.
-The flat package is a known global-collision risk, so the pipeline must use
-the explicit Xray `test_key` mapping in result XML rather than relying on
-Definition matching.
+An automated test's identity is exactly:
 
-## Class names
+```text
+tests.<ClassName>.<methodName>
+```
 
-- One feature-oriented class per test-plan feature group.
-- Use PascalCase and the suffix `Test`, for example `EditMeterTest`.
-- Derive the feature name from the ticket/design domain, not from an individual
-  data row or environment.
-- Do not include ticket keys, timestamps, branch names, or generated ordinals.
-- If the name would collide with an existing class, append a stable domain
-  qualifier, such as `AdminEditMeterTest`; do not append a numeric suffix.
-- A class must remain unchanged when only test data or step wording changes.
+It equals the class and method that Surefire writes: `classname="tests.<ClassName>"`
+and `name="<methodName>"`. Xray concatenates those two attributes into the
+Definition that binds results (F10, F11).
 
-## Method names and identity
+A manual test has no class. Its identity is:
 
-- Use lower camel case and a verb-led behavior name, for example
-  `testEditMeterInsertRecord`.
-- Describe one observable behavior; do not include data values, timestamps, or
-  randomized text.
-- The identity is exactly:
+```text
+manual.<Feature>.<behavior>
+```
 
-  ```text
-  tests.<ClassName>.<methodName>
-  ```
+`<Feature>` is PascalCase and `<behavior>` is a verb-led lowerCamelCase name,
+for example `manual.Login.verifyBrandColors`. The `manual.` prefix keeps the
+two namespaces apart.
 
-- The identity must equal the TestNG class and method emitted by Surefire:
-  `classname="tests.<ClassName>"` and `name="<methodName>"`.
-- A class rename or method rename changes the identity and therefore changes
-  the Xray Definition. It requires regeneration of the Step 6 identity map
-  and the Step 7 JUnit `test_key` injection mapping.
-- Data-driven rows intentionally share the method identity unless a later
-  contract introduces a row-level identity scheme.
+A class or method rename changes the identity and therefore the Xray
+Definition. Regenerate the identity map and the Step 7 property injection
+rather than aliasing the old name.
+
+## Package
+
+Generated tests stay in the flat `tests` package, as the repository does.
+Namespacing the package would move existing classes and change suite entries.
+The flat package can collide with another project's tests. Xray searches other
+Jira projects before it creates a test, so the Step 7 read-back fails any result
+that binds outside the target project (R1).
+
+## Classes and methods
+
+- **Class.** Use PascalCase and the suffix `Test`, such as `EditMeterTest`, one
+  class per feature. Name it from the ticket or design domain, not from a data
+  row, an environment, a ticket key, a date, or a branch.
+- **Existing feature.** When `TEST-REPO-READ` already has a test class for the
+  feature, add methods to that class with `Mode: extend`. Create a new class
+  only for a feature with none. Never append a numeric suffix to avoid a
+  collision.
+- **Method.** Start with `test` and describe one observable behavior, such as
+  `testEditMeterInsertRecord`. Do not include data values or random text. A
+  method name is unique within its class and does not reuse an existing method.
+- **Stability.** A name does not change when only test data or step wording
+  changes.
+- **Data-driven rows.** Rows of one `@DataSource` method share its identity
+  until Q11 is decided.
 
 ## Supporting files
 
-- Page objects use PascalCase plus `Page`, for example `LoginPage`.
-- Assertion helpers use PascalCase plus `Assertions`, for example
-  `LoginAssertions`.
-- JSON data files use lower kebab-free names matching the feature,
-  for example `login.json`.
-- Suite files retain the repository names `testNg.xml`, `smoketest.xml`, and
-  `regressiontest.xml`.
+| File | Name | Example |
+|---|---|---|
+| Page object | `<Feature>` | `EditMeter` |
+| Assertion class | `<Feature>Assertion` | `EditMeterAssertion` |
+| Model | `<Feature>Data` | `LocationSummaryData` |
+| Test data | `<Feature>Data.json` | `HeatMapData.json` |
+| Suite files | Existing names | `testNg.xml`, `smoketest.xml`, `regressiontest.xml` |
+
+Match the baseline's TestNG annotations, groups, page-object calls, assertion
+style, data providers, and formatting.
 
 ## Stable example
 
-For a feature named “Edit meter”, the generated identity is:
+For a feature named "Edit meter", the identity is:
 
 ```text
 tests.EditMeterTest.testEditMeterInsertRecord
 ```
 
-The corresponding source and result fields are:
+The source and result fields are:
 
 ```text
 src/test/java/tests/EditMeterTest.java
 classname="tests.EditMeterTest"
 name="testEditMeterInsertRecord"
 ```
-

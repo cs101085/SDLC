@@ -1,0 +1,110 @@
+id: stage.verification
+namespace: ai-dlc
+description: >
+  Lifecycle stage 8b — Verification. Build the solution and run the full unit
+  and Playwright suites, effectively a full regression test.
+
+# ═══ Variables ═══════════════════════════════════════════════════════════
+#
+# Define this stage's place in the pipeline, and configure what it needs to complete its work
+variables:
+  stage:
+    name: Verification
+    artifactDir: Verification
+    stub: true
+
+    # Set which stages this one triggers. List multiple to start forked stages in parallel.
+    # A stage named by several stages waits for all of them.
+    nextStages:
+      - Release
+
+    # List of assets the stage needs (provided from earlier stages or configuration):
+    # - value accessed from inputs.resources.<name> { kind: value }
+    # - artifact added to the workspace by requested file name { kind: artifact, as: <file name> }
+    # - branch checked out in the workspace by requested folder name { kind: branch, as: <folder name> }
+    resources: []
+
+    # List of assets the stage delivers, identified by name and kind:
+    # - valueName: { kind: value }
+    # - artifactName: { kind: artifact, file: <file name> }
+    # - branchName: { kind: branch, from: <branch name>, as: <folder name> }
+    deliverables: []
+
+    # Confidence check run before the stage's work; leave out, or set agent empty or threshold 0, to skip it:
+    # - agent: the agent that assesses
+    # - threshold: the score out of 100 needed to continue; below it the run stops and is Blocked
+    confidence:
+      agent: ""
+      threshold: 50
+
+# ═══ Flow inputs ════════════════════════════════════════════════════════════
+#
+# Do not change. Makes the stage inputs available to the stage's tasks
+# - inputs.context: stage run details (ticketId, dryRun, workspacePath)
+# - inputs.resources: each named asset in stage.resources
+inputs:
+  - id: context
+    type: JSON
+    required: true
+
+  - id: resources
+    type: JSON
+    required: true
+
+# ═══ Tasks ══════════════════════════════════════════════════
+#
+# Implement the work the stage is responsible for completing
+#
+# Stages are a sequence of Subflow, Command, or other tasks:
+# - Subflows defined in flows/util are common operations and external integrations
+# - Commands can be used to perform stage-specific operations
+#
+# Tasks should satisfy all declared stage.deliverables
+# - value should be set as a variable passed to output.deliverables
+# - artifact should be a file written to the workspace's output/ (automatically published at stage-finalize)
+# - branch should be pushed upstream from its checkout, in the folder as: names (automatically recorded at stage-finalize)
+tasks:
+
+  # The task to determine confidence in the stage's ability to proceed:
+  # - threshold is the score needed to continue; otherwise the run stops and is Blocked
+  # - confidence is skipped if the agent or threshold are not set
+  - id: confidence
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: ai-dlc
+    flowId: agents.confidence-check
+    inputs:
+      context: "{{ inputs.context }}"
+      agent: "{{ vars.stage.confidence.agent ?? '' }}"
+      threshold: "{{ vars.stage.confidence.threshold ?? 0 }}"
+      prompt: "Perform {{ vars.stage.name }} confidence assessment."
+
+  # Implement the rest of the stage's domain work from here
+
+  # None yet: a stub, which logs and succeeds.
+  - id: domain-work
+    type: io.kestra.plugin.core.log.Log
+    message: "{{ vars.stage.name }} ran as a stub — no domain work."
+
+# ═══ Outputs ═════════════════════════════════════════════════════════════
+#
+# Finalize the stage operation by reporting its status and outputs.
+# - statusCode: SUCCESS or FAILED
+# - failureReason: message explaining why the stage failed, if applicable
+# - deliverables: the values in stage.deliverables, as JSON
+# - nextStages: stages to trigger next, normally stage.nextStages; [] ends this path
+outputs:
+  - id: statusCode
+    type: STRING
+    value: SUCCESS
+
+  - id: failureReason
+    type: STRING
+    value: ""
+
+  - id: deliverables
+    type: JSON
+    value: "{}"
+
+  - id: nextStages
+    type: JSON
+    value: "{{ vars.stage.nextStages | json }}"

@@ -1,0 +1,189 @@
+id: stage.test-case-generation
+namespace: ai-dlc
+description: |
+  Lifecycle stage Test Case Generation. Produces testplan.md and testcode.md.
+  - Entry check: rates whether the ticket, analysis, design and implementation are good enough to test from.
+  - Runs the test-case-generator agent against them, the test repository and the source at baseBranch. It never sees the feature branch.
+  - Passes SUCCESS and NO_UI_SURFACE; fails on any other status or a contract violation.
+  - Exit check: rates whether the plan covers the requirements and the code carries out the plan.
+
+# ═══ Variables ═══════════════════════════════════════════════════════════
+#
+# Define this stage's place in the pipeline, and configure what it needs to complete its work
+variables:
+  stage:
+    name: TestCaseGeneration
+    artifactDir: TestCaseGeneration
+    stub: false
+
+    # PLACEHOLDER: AGENT-PATH
+    #   resolves-to: flat pack folders in AIAgents/
+    #   becomes:     AIDLC/TestCaseGeneration/<agent>, as the other stages request theirs
+    #   on-migration: confirm the AGENT_CONFIGS_REPO layout, move each pack, and change the three names here
+    agent: test-case-generator
+
+    # Set which stages this one triggers. List multiple to start forked stages in parallel.
+    # A stage named by several stages waits for all of them.
+    nextStages:
+      - SecondSecurityReview
+
+    # List of assets the stage needs (provided from earlier stages or configuration):
+    # - value accessed from inputs.resources.<name> { kind: value }
+    # - artifact added to the workspace by requested file name { kind: artifact, as: <file name> }
+    # - branch checked out in the workspace by requested folder name { kind: branch, as: <folder name> }
+    # - dependency linked in the workspace from the dependencies folder { kind: dependency, path: <path>, as: <name> }
+    # baseBranch: no featureBranch is requested, so the agent cannot see Code Generation's output (F1).
+    # testRepository: the Playwright repository. A dependency reaches an agent only through filesIn.
+    resources:
+      - ticket: { kind: artifact, as: input.json }
+      - ticketAttachments: { kind: artifact, as: attachments.tar }
+      - design: { kind: artifact, as: design.md }
+      - implementation: { kind: artifact, as: implementation.md }
+      - baseBranch: { kind: branch, as: source }
+      # PLACEHOLDER: TEST-REPO-READ
+      #   resolves-to: References/Test Repository/, copied to the dependencies folder as test-repository
+      #   becomes:     a read-only branch resource through a second _config/projects.yml entry (repo:)
+      #   on-migration: add the repository and its credentials to projects.yml, then replace this entry
+      - testRepository: { kind: dependency, path: test-repository, as: test-repository }
+
+    # List of assets the stage delivers, identified by name and kind:
+    # - valueName: { kind: value }
+    # - artifactName: { kind: artifact, file: <file name> }
+    # - branchName: { kind: branch, from: <branch name>, as: <folder name> }
+    # confidence-inputs.md and confidence-coverage.md are written by agents.confidence-check and published
+    # with the stage, so they are not declared. Step 6 adds the value automatedExecutionKey.
+    deliverables:
+      - testPlan: { kind: artifact, file: testplan.md }
+      - testCode: { kind: artifact, file: testcode.md }
+      - xrayPayload: { kind: artifact, file: xray-payload.json }   # written from Step 6
+
+    # Confidence check run before the stage's work; leave out, or set agent empty or threshold 0, to skip it:
+    # - agent: the agent that assesses
+    # - threshold: the score out of 100 needed to continue; below it the run stops and is Blocked
+    # exit: read only by this flow's second check, after the work. The graph compiler ignores it.
+    confidence:
+      agent: test-case-generator-confidence
+      threshold: 50
+      exit:
+        agent: test-case-generator-coverage-confidence
+        threshold: 50
+        point: coverage
+
+# ═══ Flow inputs ════════════════════════════════════════════════════════════
+#
+# Do not change. Makes the stage inputs available to the stage's tasks
+# - inputs.context: stage run details (ticketId, dryRun, workspacePath)
+# - inputs.resources: each named asset in stage.resources
+inputs:
+  - id: context
+    type: JSON
+    required: true
+
+  - id: resources
+    type: JSON
+    required: true
+
+# ═══ Tasks ══════════════════════════════════════════════════
+#
+# Implement the work the stage is responsible for completing
+#
+# Stages are a sequence of Subflow, Command, or other tasks:
+# - Subflows defined in flows/util are common operations and external integrations
+# - Commands can be used to perform stage-specific operations
+#
+# Tasks should satisfy all declared stage.deliverables
+# - value should be set as a variable passed to output.deliverables
+# - artifact should be a file written to the workspace's output/ (automatically published at stage-finalize)
+# - branch should be pushed upstream from its checkout, in the folder as: names (automatically recorded at stage-finalize)
+tasks:
+
+  # The task to determine confidence in the stage's ability to proceed:
+  # - threshold is the score needed to continue; otherwise the run stops and is Blocked
+  # - confidence is skipped if the agent or threshold are not set
+  # Writes confidence-inputs.md. Reads the ticket, the upstream artifacts and the source. It does not
+  # get the test repository: a dependency reaches an agent only through filesIn.
+  - id: confidence
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: ai-dlc
+    flowId: agents.confidence-check
+    inputs:
+      context: "{{ inputs.context }}"
+      agent: "{{ vars.stage.confidence.agent ?? '' }}"
+      threshold: "{{ vars.stage.confidence.threshold ?? 0 }}"
+      prompt: "Perform {{ vars.stage.name }} confidence assessment."
+
+  # Implement the rest of the stage's domain work from here
+
+  # filesIn lists every artifact, the source checkout and the test repository, which the default would
+  # leave out. The checkout is mounted read-only at /work/resources/inputs/source.
+  - id: run-test-case-generation-container
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: ai-dlc
+    flowId: agents.run-container
+    inputs:
+      context: "{{ inputs.context }}"
+      agentName: "{{ vars.stage.agent }}"
+      prompt: "Generate the test plan and test code for ticket {{ inputs.context.ticketId }}."
+      readOnly: true
+      filesIn:
+        - "{{ inputs.resources }}"
+      filesOut:
+        - testplan.md
+        - testcode.md
+        - stdout.log: { as: test-case-generation_reasoning.txt }
+
+  # Sets vars.statusCode and vars.failureReason for the outcome.
+  - id: check-result
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      PLAN: "{{ inputs.context.workspacePath }}/output/testplan.md"
+      CODE: "{{ inputs.context.workspacePath }}/output/testcode.md"
+      AGENT_EXIT_CODE: "{{ outputs['run-test-case-generation-container'].outputs.exitCode }}"
+      TEST_REPO: "{{ inputs.resources.testRepository ?? '' }}"
+    commands:
+      - bash /app/flows/stages/test-case-generation/check-result.sh
+
+  # Writes confidence-coverage.md. Runs only on a plan and code that passed the contract check: the
+  # assessor reads the stage resources, both outputs and the test repository. A rating under the threshold
+  # fails the stage after the files are written, so they are still published.
+  - id: confidence-coverage
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: ai-dlc
+    flowId: agents.confidence-check
+    runIf: "{{ outputs['check-result'].vars.statusCode == 'SUCCESS' }}"
+    inputs:
+      context: "{{ inputs.context }}"
+      agent: "{{ vars.stage.confidence.exit.agent ?? '' }}"
+      threshold: "{{ vars.stage.confidence.exit.threshold ?? 0 }}"
+      point: "{{ vars.stage.confidence.exit.point ?? 'coverage' }}"
+      prompt: "Perform {{ vars.stage.name }} coverage confidence assessment."
+      filesIn:
+        - "{{ inputs.resources }}"
+        - "{{ inputs.context.workspacePath }}/output/testplan.md"
+        - "{{ inputs.context.workspacePath }}/output/testcode.md"
+
+# ═══ Outputs ═════════════════════════════════════════════════════════════
+#
+# Finalize the stage operation by reporting its status and outputs.
+# - statusCode: SUCCESS or FAILED
+# - failureReason: message explaining why the stage failed, if applicable
+# - deliverables: the values in stage.deliverables, as JSON
+# - nextStages: stages to trigger next, normally stage.nextStages; [] ends this path
+outputs:
+  - id: statusCode
+    type: STRING
+    value: "{{ outputs is defined and outputs['check-result'] is defined and outputs['check-result'].vars is defined and outputs['check-result'].vars.statusCode is defined ? outputs['check-result'].vars.statusCode : 'FAILED' }}"
+
+  - id: failureReason
+    type: STRING
+    value: "{{ outputs is defined and outputs['check-result'] is defined and outputs['check-result'].vars is defined and outputs['check-result'].vars.failureReason is defined ? outputs['check-result'].vars.failureReason : '' }}"
+
+  - id: deliverables
+    type: JSON
+    value: "{}"
+
+  - id: nextStages
+    type: JSON
+    value: "{{ vars.stage.nextStages | json }}"

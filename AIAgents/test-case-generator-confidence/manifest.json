@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "agent": {
+    "name": "test-case-generator-confidence",
+    "description": "Entry confidence assessor for Test Case Generation: rates whether the Jira ticket and the Analysis and Design artifacts support writing correct UI tests"
+  },
+  "container": {
+    "name": "test-case-generator-confidence",
+    "image": "ghcr.io/harris-smartworks/copilot-cli:latest"
+  },
+  "files": [
+    "agents/test-case-generator-confidence.agent.md",
+    "instructions/test-case-generator-confidence.instructions.md",
+    "instructions/confidence-contract.md",
+    "manifest.json"
+  ]
+}
